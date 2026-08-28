@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar, cast
 
-from pontonier.core import gitproc, streamcap
+from pontonier.core import gitproc, streamcap, wslpath
 from pontonier.core.redaction import DiffRedactor
 
 if TYPE_CHECKING:
@@ -169,7 +169,7 @@ def _git(
     extra_env: dict[str, str] | None = None,
     stdin: str | None = None,
 ) -> str:
-    env = _base_git_env()
+    env = _base_git_env(cwd)
     if extra_env:
         env.update(extra_env)
     try:
@@ -323,6 +323,17 @@ def _path() -> str:
 #     config and honors neither, so the resolver must too. Honoring an inherited
 #     GIT_CONFIG_NOSYSTEM would let the resolver miss a system `core.excludesFile` the child
 #     still applies, and the injected `-c` would then mask it.
+#
+# The #330 invariant, updated for the WSL gitdir-pointer translation (fork issue #4):
+# GIT_DIR/GIT_WORK_TREE are never INHERITED from the server's own environment -- nothing
+# above adds them, and nothing ever will, by design. But `_base_git_env(cwd)` (the env BOTH
+# this resolver and the enumeration child build on) MAY itself carry GIT_DIR/GIT_WORK_TREE,
+# computed by `wslpath.git_dir_override(cwd)`, when `cwd` is (or is under) a Windows-created
+# linked worktree's root under WSL. That does not violate the invariant above: both
+# `_base_git_env(cwd)` and `_resolver_env(cwd)` (which calls it) derive the override from the
+# SAME `cwd` the child runs in, so the resolver still discovers the SAME repo the child does
+# -- the invariant is satisfied by a different mechanism (derived-from-cwd, not inherited),
+# not broken.
 _RESOLVER_GLOBAL_CONFIG_VARS = (
     "HOME",
     "XDG_CONFIG_HOME",
@@ -330,17 +341,25 @@ _RESOLVER_GLOBAL_CONFIG_VARS = (
 )
 
 
-def _base_git_env() -> dict[str, str]:
-    """The complete replacement environment for every hardened git child here: C locale
-    for deterministic output plus PATH, and nothing else. No HOME/XDG means git reads no
-    global config (hooks, fsmonitor, attributes) from the user's home — deliberate
-    hardening. The global *excludes* layer, which is data-only, is reintroduced narrowly
-    and explicitly via `-c core.excludesFile` on the untracked-enumeration calls (see
-    `_global_excludes_flags`); nothing else from the user's home is restored."""
+def _base_env_no_override() -> dict[str, str]:
+    """Return the override-free three-key environment shared by git children."""
     return {"LC_ALL": "C", "LANG": "C", "PATH": _path()}
 
 
-def _resolver_env() -> dict[str, str]:
+def _base_git_env(cwd: str) -> dict[str, str]:
+    """Build the hardened git environment, deriving WSL overrides from ``cwd``.
+
+    Ordinary repositories receive the same locale/PATH-only environment as
+    before. A Windows-created linked worktree under WSL additionally receives
+    ``GIT_DIR`` and ``GIT_WORK_TREE`` derived from the same directory in which
+    the git child runs. No HOME/XDG values are inherited.
+    """
+    env = _base_env_no_override()
+    env.update(wslpath.git_dir_override(cwd))
+    return env
+
+
+def _resolver_env(cwd: str) -> dict[str, str]:
     """Environment for the excludes resolver (:func:`_global_excludes_flags`): the
     enumeration child's stripped env (:func:`_base_git_env`) plus ONLY the global-config
     source vars in :data:`_RESOLVER_GLOBAL_CONFIG_VARS`. Building it as base-plus-allowlist
@@ -348,7 +367,7 @@ def _resolver_env() -> dict[str, str]:
     solely by the global config layer: it discovers the same repo (no inherited GIT_DIR or
     GIT_CEILING_DIRECTORIES) and reads the same system+local config, so it can never inject
     an override that masks a repo-local ``core.excludesFile`` the child would honor (#330)."""
-    env = _base_git_env()
+    env = _base_git_env(cwd)
     for var in _RESOLVER_GLOBAL_CONFIG_VARS:
         value = os.environ.get(var)
         if value is not None:
@@ -411,7 +430,7 @@ def _global_excludes_flags(cwd: str, timeout: int) -> list[str]:
     rather than materializing an arbitrarily large value and interpolating it into the next
     git argv. Fails loud on that or any ``git config`` outcome other than "found" (0) or
     "absent" (1) so a broken resolver cannot silently restore the egress bug."""
-    env = _resolver_env()
+    env = _resolver_env(cwd)
 
     def _read_value(lines: Iterator[str]) -> str:
         # `git config -z --get` prints `<value>\0`; the value may itself contain newlines, so
@@ -481,7 +500,7 @@ def _resolve_commit(cwd: str, ref: str, timeout: int) -> str | None:
             errors="surrogateescape",
             timeout=timeout,
             check=False,
-            env=_base_git_env(),
+            env=_base_git_env(cwd),
         )
     except FileNotFoundError as exc:
         raise GitUnavailableError("git executable not found") from exc
@@ -697,7 +716,7 @@ def _untracked_new_file_diff(
         indexed = _run_git_lines(
             ["ls-files", "--others", "--exclude-standard", "-z", "--", *norm_paths],
             cwd=cwd,
-            env=_base_git_env(),
+            env=_base_git_env(cwd),
             timeout=timeout,
             sep="\0",
             consume=_index_untracked,
@@ -713,7 +732,7 @@ def _untracked_new_file_diff(
         files, added, _removed = _run_git_lines(
             [*diff_args, "--numstat"],
             cwd=cwd,
-            env={**_base_git_env(), **env},
+            env={**_base_git_env(cwd), **env},
             timeout=timeout,
             sep="\n",
             consume=_sum_numstat,
@@ -731,7 +750,7 @@ def _summary(cwd: str, diff_args: list[str], timeout: int) -> DiffSummary:
     files, added, removed = _run_git_lines(
         summary_args,
         cwd=cwd,
-        env=_base_git_env(),
+        env=_base_git_env(cwd),
         timeout=timeout,
         sep="\n",
         consume=_sum_numstat,
@@ -848,7 +867,7 @@ def _stream_redacted_diff(  # noqa: PLR0915
 ) -> None:
     """Run `git <args>` and feed its stdout, line by line, into `acc` — bounded in
     memory. Raises the same typed errors as `_git` on git failure/timeout."""
-    env = _base_git_env()
+    env = _base_git_env(cwd)
     if extra_env:
         env.update(extra_env)
     try:
@@ -1005,7 +1024,7 @@ def count_untracked(cwd: str, paths: list[str] | None, timeout: int) -> int:
     return _run_git_lines(
         args,
         cwd=cwd,
-        env=_base_git_env(),
+        env=_base_git_env(cwd),
         timeout=timeout,
         sep="\0",
         consume=_count_records,
@@ -1060,7 +1079,7 @@ def _worktree_state_token(
     return _run_git_lines(
         args,
         cwd=cwd,
-        env=_base_git_env(),
+        env=_base_git_env(cwd),
         timeout=timeout,
         sep="\0",
         consume=_fold,

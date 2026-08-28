@@ -72,8 +72,8 @@ def _isolate_git_env(monkeypatch, tmp_path_factory):
 
     _real_base_git_env = gitdiff._base_git_env
 
-    def _base_git_env_no_system() -> dict[str, str]:
-        env = _real_base_git_env()
+    def _base_git_env_no_system(cwd: str) -> dict[str, str]:
+        env = _real_base_git_env(cwd)
         env["GIT_CONFIG_NOSYSTEM"] = "1"
         return env
 

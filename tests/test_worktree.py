@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from conftest import run_git
-from pontonier.core import gitdiff, gitproc, worktree
+from pontonier.core import gitdiff, gitproc, worktree, wslpath
 
 
 def _git(cwd, *args):
@@ -1609,3 +1609,33 @@ def test_sanitize_echo_prose_never_cancels_a_key_blocks_fail_closed_blanket(ch):
     assert "trailing secret area" not in (worktree.sanitize_prose(text, ALIASES) or "")
     assert "trailing secret area" not in (worktree.sanitize_echo_prose(text, ALIASES) or "")
     assert body not in (worktree.sanitize_echo_prose(text, ALIASES) or "")
+
+
+# --- P1-b: _ensure_repo_with_head refuses a Windows-shaped linked worktree -----------
+#
+# The write path (worktree creation) must REFUSE a Windows-created linked-worktree `.git`
+# pointer rather than translate it, unlike gitdiff's read path -- so `git worktree add`
+# never receives a translated GIT_DIR. Ported from `codex-in-claude`'s `_core/worktree.py`
+# fix (this fork's WSL2 port, see `codex-in-claude#13`, plan doc
+# `docs/superpowers/specs/pontonier-fork-wsl-port.md` §4.3).
+
+
+def test_ensure_repo_with_head_refuses_windows_shaped_linked_worktree(tmp_path):
+    (tmp_path / ".git").write_text("gitdir: I:/apps/x/.git/worktrees/n\n")
+    expected_gitdir = wslpath.linked_worktree_gitdir_from_ancestors(str(tmp_path))
+    assert expected_gitdir, "fixture did not produce a Windows-shaped pointer; test proves nothing"
+
+    with pytest.raises(worktree.NotAGitRepoError) as excinfo:
+        worktree._ensure_repo_with_head(str(tmp_path), timeout=10)
+
+    message = str(excinfo.value)
+    assert expected_gitdir in message
+    # CLI-agnostic: pontonier's core must never name a specific bridge/tool.
+    assert "codex" not in message.lower()
+
+
+def test_ensure_repo_with_head_succeeds_for_ordinary_repo_with_head(repo):
+    # No-regression check: an ordinary repo (not a Windows-shaped linked worktree) with a
+    # HEAD commit must not raise -- the refusal guard added for Windows-shaped worktrees
+    # must not misfire on a normal repository.
+    worktree._ensure_repo_with_head(str(repo), timeout=10)
