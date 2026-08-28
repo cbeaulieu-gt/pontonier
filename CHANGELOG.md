@@ -8,6 +8,31 @@ This file is decision history, not current policy. Rules that still bind live in
 
 ## [Unreleased]
 
+### Fixed
+
+- `pontonier.core.gitdiff._base_git_env` and `pontonier.core.worktree._base_env`:
+  derive the `GIT_DIR`/`GIT_WORK_TREE` override from the child git process's own
+  `cwd` instead of building an override-free environment unconditionally.
+  `_base_git_env` now takes a required `cwd` argument and folds in
+  `wslpath.git_dir_override(cwd)`, so a hardened git child launched against a
+  Windows-created linked worktree under WSL2 gets a `GIT_DIR`/`GIT_WORK_TREE` it
+  can actually resolve; an ordinary repository is unaffected (no override). The
+  override-free environment moved to a new `_base_git_env_no_override` helper.
+  `_resolver_env` and every internal `gitdiff.py` caller were threaded with the
+  same `cwd`. `worktree._base_env` (which every `worktree.py` git child already
+  routed through) now requires `repo` too, and continues to pop
+  `GIT_DIR`/`GIT_WORK_TREE` back out after building on `gitdiff._base_git_env`:
+  the write path refuses to run inside a Windows-shaped linked worktree (see
+  below) rather than translating one, since handing a translated `GIT_DIR` to
+  `git worktree add` could write a WSL-shaped pointer into the user's real
+  repository metadata. `worktree._ensure_repo_with_head` gained a refusal guard
+  — it raises `NotAGitRepoError` naming the detected gitdir when `repo`'s `.git`
+  file points at a Windows-shaped linked-worktree gitdir, before any git call
+  runs. Ported from `codex-in-claude`'s WSL2 fix (`codex-in-claude#13`), with
+  the refusal message reworded to name no specific bridge/tool since this
+  library is CLI-agnostic. Plan doc §4.2/§4.3:
+  `codex-in-claude`'s `docs/superpowers/specs/pontonier-fork-wsl-port.md`.
+
 ### Added
 
 - `pontonier.core.wslpath`: translate Windows-shaped linked-worktree `gitdir:`

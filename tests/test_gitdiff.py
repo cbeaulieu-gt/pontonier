@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from conftest import run_git
-from pontonier.core import gitdiff, streamcap
+from pontonier.core import gitdiff, streamcap, wslpath
 from pontonier.core.redaction import DiffRedactor
 
 
@@ -1783,7 +1783,7 @@ def test_global_excludes_flags_sanitizes_inherited_git_dir(tmp_path, monkeypatch
     assert flags == ["-c", f"core.excludesFile={xdg / 'git' / 'ignore'}"]
 
 
-def test_resolver_env_adds_only_global_config_allowlist_over_base(monkeypatch):
+def test_resolver_env_adds_only_global_config_allowlist_over_base(tmp_path, monkeypatch):
     # The resolver env must be the enumeration child's base env plus ONLY the global-config
     # source vars, so repo discovery and the system/local config view match the child and
     # nothing can divert resolution to a different repo/config (#330 review). Asserted on the
@@ -1811,8 +1811,8 @@ def test_resolver_env_adds_only_global_config_allowlist_over_base(monkeypatch):
     monkeypatch.setenv("HOME", "/home/u")
     monkeypatch.setenv("XDG_CONFIG_HOME", "/home/u/.config")
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/home/u/.gitconfig")
-    base = gitdiff._base_git_env()
-    env = gitdiff._resolver_env()
+    base = gitdiff._base_git_env(str(tmp_path))
+    env = gitdiff._resolver_env(str(tmp_path))
     # Everything in the base env is present unchanged.
     for key, value in base.items():
         assert env[key] == value
@@ -2150,3 +2150,42 @@ def test_sum_numstat_counts_reader_truncated_record_exactly():
     # that happens to contain that text.
     truncated = "1\t2\t" + "d" * 64 + "…[line truncated]\n"
     assert gitdiff._sum_numstat(iter([truncated, "5\t5\tb.py\n"])) == (2, 6, 7)
+
+
+# --- P1-b: _base_git_env(cwd) derives its GIT_DIR/GIT_WORK_TREE override from cwd ----
+#
+# `_base_git_env` gains a required `cwd` parameter and folds `wslpath.git_dir_override(cwd)`
+# into the returned env, so a hardened git child launched against a Windows-created linked
+# worktree under WSL2 gets a GIT_DIR/GIT_WORK_TREE it can actually resolve. Ported from
+# `codex-in-claude`'s `_core/gitdiff.py` fix (this fork's WSL2 port, see
+# `codex-in-claude#13`, plan doc `docs/superpowers/specs/pontonier-fork-wsl-port.md` §4.2).
+
+
+def test_base_git_env_ordinary_repo_has_no_git_dir_override(tmp_path):
+    # No-regression direction: an ordinary checkout (no Windows-shaped linked-worktree
+    # pointer) must not gain a GIT_DIR/GIT_WORK_TREE override it never had before.
+    (tmp_path / ".git").mkdir()
+    env = gitdiff._base_git_env(str(tmp_path))
+    assert "GIT_DIR" not in env
+    assert "GIT_WORK_TREE" not in env
+
+
+def test_base_git_env_windows_shaped_worktree_includes_translated_override(tmp_path):
+    # A `cwd` under a Windows-created linked-worktree `.git` pointer file must carry the
+    # same translated GIT_DIR/GIT_WORK_TREE that `wslpath.git_dir_override` computes.
+    (tmp_path / ".git").write_text("gitdir: I:/apps/x/.git/worktrees/n\n")
+    expected = wslpath.git_dir_override(str(tmp_path))
+    assert expected, "fixture did not produce a Windows-shaped override; test proves nothing"
+
+    env = gitdiff._base_git_env(str(tmp_path))
+
+    assert env["GIT_DIR"] == expected["GIT_DIR"]
+    assert env["GIT_WORK_TREE"] == expected["GIT_WORK_TREE"]
+
+
+def test_base_git_env_requires_cwd_argument():
+    # Signature-shape test: `cwd` is now required, not optional. This is the cheapest
+    # possible red right now -- current code takes zero args and will fail this test by
+    # NOT raising.
+    with pytest.raises(TypeError):
+        gitdiff._base_git_env()
