@@ -271,3 +271,28 @@ def test_git_dir_override_returns_empty_when_no_dot_git_within_ceiling(tmp_path)
         deep = deep / f"d{i}"
     deep.mkdir(parents=True)
     assert wslpath.git_dir_override(str(deep)) == {}
+
+
+def test_git_dir_override_finds_marker_beyond_a_fixed_iteration_cap(tmp_path):
+    # The walk-up must reach the filesystem root, not give up after a fixed
+    # number of hops -- the docstring on this function promises "walks toward
+    # the filesystem root", which is a promise about reaching the root, not
+    # about stopping after some constant number of ancestors. A `.git` marker
+    # that sits 66 directories above the leaf must still be found: 66 clears
+    # the boundary between "definitely still within any reasonable small
+    # ceiling" and "definitely deep enough to expose a fixed iteration cap"
+    # with a one-level safety margin either way, while staying shallow enough
+    # to avoid Windows MAX_PATH problems from `tmp_path`'s own (often long)
+    # prefix.
+    _write_gitdir_file(tmp_path / ".git", "gitdir: I:/apps/x/.git/worktrees/n\n")
+    deep = tmp_path
+    for i in range(66):
+        deep = deep / f"d{i}"
+    deep.mkdir(parents=True)
+
+    override = wslpath.git_dir_override(str(deep))
+
+    assert override == {
+        "GIT_DIR": "/mnt/i/apps/x/.git/worktrees/n",
+        "GIT_WORK_TREE": str(tmp_path),  # the discovered root, however deep the walk
+    }

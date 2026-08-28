@@ -13,7 +13,6 @@ import re
 from pathlib import Path
 
 _WINDOWS_DRIVE_PATH_RE = re.compile(r"^(?P<drive>[A-Za-z]):[/\\\\](?P<rest>.*)$")
-_MAX_PARENT_LEVELS = 64
 
 
 def normalize_wsl_drive_path(value: str) -> str:
@@ -67,7 +66,7 @@ def linked_worktree_gitdir(cwd: str) -> str | None:
 def _first_git_marker_ancestor(cwd: str) -> Path | None:
     """Return the first ancestor containing a ``.git`` marker."""
     current = Path(cwd).absolute()
-    for _ in range(_MAX_PARENT_LEVELS):
+    while True:
         marker = current / ".git"
         try:
             marker_exists = marker.exists()
@@ -77,9 +76,8 @@ def _first_git_marker_ancestor(cwd: str) -> Path | None:
             return current
         parent = current.parent
         if parent == current:
-            break
+            return None
         current = parent
-    return None
 
 
 def linked_worktree_gitdir_from_ancestors(cwd: str) -> str | None:
@@ -98,9 +96,10 @@ def git_dir_override(cwd: str) -> dict[str, str]:
     """Build git environment overrides for a Windows-created worktree.
 
     Starting at ``cwd``, the search walks toward the filesystem root and stops
-    at the first directory containing any ``.git`` marker. A bounded level
-    count supplements the root check so malformed path behavior cannot make the
-    search loop forever.
+    at the first directory containing any ``.git`` marker. There is no fixed
+    limit on how many ancestors are checked -- the walk terminates only when a
+    marker is found or the filesystem root is reached (detected by a
+    directory whose parent is itself).
 
     Args:
         cwd: Directory from which git repository discovery would begin.

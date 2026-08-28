@@ -28,6 +28,18 @@ This file is decision history, not current policy. Rules that still bind live in
   pointer body; the two are not duplicates. Also ported from
   `codex-in-claude#13`.
 
+### Fixed
+
+- `pontonier.core.wslpath.git_dir_override`: removed the fixed 64-iteration cap
+  (`_MAX_PARENT_LEVELS`) on the ancestor walk that looks for the first `.git`
+  marker. A `cwd` whose repository root sat 64 or more path components above it
+  never had that root checked, so `git_dir_override` silently returned `{}`
+  (no override) instead of translating a Windows-shaped `gitdir:` pointer for a
+  deeply nested working tree — contradicting its own docstring, which promises
+  the search "walks toward the filesystem root." The walk now continues
+  unconditionally until a `.git` marker is found or the filesystem root is
+  reached. Caught by CodeRabbit reviewing this PR.
+
 ## [0.6.0] — 2026-08-20
 
 ### Added
