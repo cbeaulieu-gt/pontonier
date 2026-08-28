@@ -18,6 +18,28 @@ class WorkspaceResolution:
     error_detail: str | None = None
 
 
+def normalize_wsl_drive_path(path: str) -> str:
+    """Translate a decoded Windows drive path to its conventional WSL mount.
+
+    Args:
+        path: Filesystem path decoded from a URI or supplied explicitly.
+
+    Returns:
+        The equivalent WSL mount path for a drive-letter input, otherwise the
+        original path unchanged.
+    """
+    if (
+        len(path) >= 3
+        and path[0] == "/"
+        and path[1].isascii()
+        and path[1].isalpha()
+        and path[2] == ":"
+        and (len(path) == 3 or path[3] == "/")
+    ):
+        return f"/mnt/{path[1].lower()}{path[3:]}"
+    return path
+
+
 def _is_within(child: Path, parent: Path) -> bool:
     try:
         child.relative_to(parent)
@@ -35,7 +57,7 @@ def resolve_workspace(
     extracted from the client's MCP roots (file:// URIs decoded by the caller)."""
     norm_roots = [str(Path(r).resolve()) for r in roots]
     if explicit is not None:
-        candidate = Path(explicit)
+        candidate = Path(normalize_wsl_drive_path(str(explicit)))
         if not candidate.is_absolute():
             return WorkspaceResolution(
                 None, None, "invalid_workspace_root", "workspace_root must be an absolute path"
