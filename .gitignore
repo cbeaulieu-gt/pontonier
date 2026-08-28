@@ -21,3 +21,8 @@ htmlcov/
 .env.*
 .claude/settings.local.json
 .DS_Store
+
+# Agent scratch files and per-branch worktrees (per standards/scratch-files.md
+# and the worktree convention applied to this fork per codex-in-claude#13 D5)
+.tmp/
+.worktrees/
