@@ -6,6 +6,28 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This file is decision history, not current policy. Rules that still bind live in
 [AGENTS.md](AGENTS.md) and the documents it links.
 
+## [Unreleased]
+
+### Added
+
+- `pontonier.core.wslpath`: translate Windows-shaped linked-worktree `gitdir:`
+  pointers (`I:/apps/.../.git/worktrees/<name>`) to their WSL2 mount form
+  (`/mnt/i/apps/.../.git/worktrees/<name>`) so git running under WSL2 can
+  resolve a worktree a native-Windows client created. `normalize_wsl_drive_path`
+  is the pure string translation; `linked_worktree_gitdir` reads a `.git`
+  pointer file; `git_dir_override` walks up from a cwd to the first `.git`
+  marker and returns the `GIT_DIR`/`GIT_WORK_TREE` overrides for the
+  Windows-shaped case, `{}` otherwise. Ported from `codex-in-claude`'s WSL2
+  fix (`codex-in-claude#13`).
+- `pontonier.core.workspace.normalize_wsl_drive_path`: translate a decoded
+  `file:///I:/...` MCP root URI (`/I:/ai/claude/x`) to its WSL2 mount form
+  (`/mnt/i/ai/claude/x`) before `resolve_workspace` validates an explicit
+  `workspace_root`. A different function from
+  `pontonier.core.wslpath.normalize_wsl_drive_path` — this one requires a
+  leading slash and targets a decoded MCP root URI, not a raw `gitdir:`
+  pointer body; the two are not duplicates. Also ported from
+  `codex-in-claude#13`.
+
 ## [0.6.0] — 2026-08-20
 
 ### Added
